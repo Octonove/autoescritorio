@@ -18,6 +18,9 @@ Descarga **directa** del instalador, sin registro. También puedes ver la [últi
 
 **Acciones**: abrir programa/archivo/URL · ejecutar comando (sin shell: los datos del disparador nunca pueden inyectar) · notificación · escribir texto · pulsar teclas · mover/copiar archivos (sin sobrescribir) · reproducir sonido · anotar en un log.
 
+**Marcadores dinámicos** (en textos de «escribir texto», «anotar en log», etc.): `{date}` fecha de hoy · `{time}` hora · `{datetime}` ambas · `{clipboard}` lo que tengas copiado · y los del disparador (`{drive}`, `{file}`, `{window}`, `{text}`).
+
+- **Ejemplos listos para usar**: botón «Ejemplos» con plantillas útiles (insertar la fecha, tu firma de correo, ordenar los PDF de Descargas, copia de seguridad al conectar un USB, pausa activa cada hora…) que añades con un clic.
 - **Reglas en lenguaje natural** (opcional, [Ollama](https://ollama.com)): «cuando conecte un USB, abre la calculadora» → regla lista.
 - Motor por transiciones con línea base (no dispara con lo ya existente), cooldown anti-ráfagas y registro de actividad.
 

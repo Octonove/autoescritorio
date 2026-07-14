@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -63,13 +64,12 @@ ACTIONS: dict[str, dict] = {
                              ("texto", "Texto a anotar", "text", "")]},
 }
 
-_id_seq = 0
-
-
 def _next_id() -> str:
-    global _id_seq
-    _id_seq += 1
-    return f"r{_id_seq}"
+    # uuid: unico SIEMPRE, tambien al crear reglas sobre otras ya cargadas de
+    # disco. (Un contador incremental colisionaba con los ids ya persistidos ->
+    # dos reglas con el mismo id compartian estado en el motor y dejaban de
+    # dispararse.)
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass
@@ -197,6 +197,13 @@ def load_rules(path) -> list[Rule]:
             rules.append(r)
         except (TypeError, ValueError):
             continue
+    # sanea ids duplicados o vacios (versiones antiguas con contador incremental
+    # podian persistir ids repetidos, que en el motor comparten estado)
+    vistos: set[str] = set()
+    for r in rules:
+        if not r.id or r.id in vistos:
+            r.id = _next_id()
+        vistos.add(r.id)
     return rules
 
 

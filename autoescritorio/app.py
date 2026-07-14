@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import webbrowser
 from tkinter import ttk, messagebox, filedialog
 import tkinter as tk
 
 from . import APP_NAME, APP_VERSION, theme
 from . import rules as R
-from . import actions, engine, nl, llm
+from . import actions, engine, nl, llm, templates
 from .config import AppConfig, load_config, save_config, RULES_PATH
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,10 @@ class App(tk.Tk):
         self.lst.bind("<Double-Button-1>", lambda e: self._edit_rule())
         rb = ttk.Frame(left); rb.pack(fill="x", pady=(6, 0))
         ttk.Button(rb, text="+ Nueva", command=self._new_rule).pack(side="left")
-        ttk.Button(rb, text="Editar", command=self._edit_rule).pack(side="left", padx=4)
-        ttk.Button(rb, text="Activar/Pausar", command=self._toggle_rule).pack(side="left")
-        ttk.Button(rb, text="Probar", command=self._test_rule).pack(side="left", padx=4)
+        ttk.Button(rb, text="Ejemplos", command=self._examples_dialog).pack(side="left", padx=4)
+        ttk.Button(rb, text="Editar", command=self._edit_rule).pack(side="left")
+        ttk.Button(rb, text="Activar/Pausar", command=self._toggle_rule).pack(side="left", padx=4)
+        ttk.Button(rb, text="Probar", command=self._test_rule).pack(side="left")
         ttk.Button(rb, text="Eliminar", command=self._delete_rule).pack(side="right")
 
         # registro de actividad
@@ -168,14 +170,89 @@ class App(tk.Tk):
         if r is None:
             return
         ctx = {"file": "(ejemplo).txt", "drive": "E:", "text": "(texto)", "window": "(ventana)"}
+        # Probar EJECUTA la accion de verdad. Para las que tienen efectos reales
+        # (mover/copiar archivos, ejecutar un comando) se confirma antes.
+        if r.action_type in ("move_files", "copy_files", "run"):
+            que = {"move_files": "MOVERÁ archivos de verdad",
+                   "copy_files": "COPIARÁ archivos de verdad",
+                   "run": "EJECUTARÁ el comando de verdad"}[r.action_type]
+            if not messagebox.askyesno(APP_NAME,
+                    f"«Probar» {que} con los datos de la regla.\n\n¿Continuar?"):
+                return
+        # Las acciones que ESCRIBEN van a la ventana con foco. Si probamos desde
+        # aqui, el foco esta en AutoEscritorio: damos unos segundos para que el
+        # usuario haga clic donde quiera el texto (si no, no se veria el efecto).
+        demora = 4 if r.action_type in ("type_text", "keys") else 0
 
         def runner():
             try:
+                if demora:
+                    for s in range(demora, 0, -1):
+                        self._ui(lambda s=s: self._set_status(
+                            f"Prueba en {s}s… haz clic donde quieras el resultado."))
+                        time.sleep(1)
+                    self._ui(lambda: self._set_status(""))
                 res = actions.execute(r.action_type, r.action_params, ctx, notify=self._notify)
                 self._log(f"▶ Prueba «{r.name}» → {res}")
             except Exception as exc:  # noqa: BLE001
                 self._log(f"✗ Prueba «{r.name}» fallo: {exc}")
         threading.Thread(target=runner, daemon=True).start()
+
+    def _examples_dialog(self) -> None:
+        cat = templates.catalog()
+        win = tk.Toplevel(self)
+        win.title("Ejemplos listos para usar")
+        win.transient(self)
+        frm = ttk.Frame(win, padding=14)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Marca los que quieras anadir. Luego puedes editarlos.",
+                  style="CardMuted.TLabel").pack(anchor="w", pady=(0, 8))
+        cont = ttk.Frame(frm)
+        cont.pack(fill="both", expand=True)
+        vars_: list[tuple[tk.BooleanVar, dict]] = []
+        for tpl in cat:
+            v = tk.BooleanVar(value=False)
+            row = ttk.Frame(cont)
+            row.pack(fill="x", pady=3, anchor="w")
+            ttk.Checkbutton(row, variable=v).pack(side="left", anchor="n")
+            texto = ttk.Frame(row)
+            texto.pack(side="left", fill="x", expand=True)
+            ttk.Label(texto, text=tpl["titulo"], font=(theme.FONT, 10, "bold")).pack(anchor="w")
+            ttk.Label(texto, text=tpl["desc"], style="CardMuted.TLabel",
+                      wraplength=430, justify="left").pack(anchor="w")
+            vars_.append((v, tpl))
+
+        def add():
+            existentes = {(r.name, r.trigger_type, r.action_type) for r in self.rules}
+            nuevos, repetidas = [], 0
+            for v, tpl in vars_:
+                if not v.get():
+                    continue
+                r = tpl["factory"]()
+                clave = (r.name, r.trigger_type, r.action_type)
+                if clave in existentes:      # no anadir la misma plantilla dos veces
+                    repetidas += 1
+                    continue
+                r.enabled = False            # llegan EN PAUSA: el usuario las activa
+                existentes.add(clave)
+                nuevos.append(r)
+            if nuevos:
+                self.rules.extend(nuevos)
+                self._persist()
+                self._refresh_rules()
+                self._log(f"➕ Anadidas {len(nuevos)} regla(s) de ejemplo EN PAUSA. "
+                          "Revisalas y pulsa Activar/Pausar para ponerlas en marcha.")
+            if repetidas:
+                self._log(f"({repetidas} ya estaban en tu lista, no se duplicaron.)")
+            win.destroy()
+
+        bar = ttk.Frame(frm)
+        bar.pack(fill="x", pady=(12, 0))
+        ttk.Button(bar, text="Anadir seleccionadas", style="Primary.TButton",
+                   command=add).pack(side="right")
+        ttk.Button(bar, text="Cancelar", command=win.destroy).pack(side="right", padx=(0, 6))
+        theme.center_window(win)
+        win.grab_set()
 
     def _nl_create(self) -> None:
         order = self.var_nl.get().strip()

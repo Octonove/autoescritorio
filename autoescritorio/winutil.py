@@ -164,11 +164,40 @@ def get_clipboard_text() -> str:
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 
+# shift, ctrl, alt, win-izq, win-der
+_MOD_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)
 
-def press_combo(parsed: dict) -> None:
-    """parsed = {'mods': set(vk), 'key': vk}. Pulsa la combinacion."""
+
+def wait_modifiers_released(timeout: float = 1.5) -> bool:
+    """Espera a que Ctrl/Alt/Shift/Win esten FISICAMENTE soltados. Devuelve True
+    si se soltaron, False si al vencer el plazo seguian pulsados.
+
+    Las reglas se disparan tipicamente con un ATAJO: en el momento de ejecutar
+    la accion, el usuario aun tiene Ctrl/Alt pulsados. Si se inyecta el texto o
+    la combinacion en ese instante, la app destino recibe Ctrl+letra (atajos) en
+    vez de texto: 'no escribe nada' aunque el envio fue correcto. El plazo (1.5s)
+    es < que el join de parada del motor (2s), para no dejar teclas 'colgadas'.
+    """
+    if not WIN:
+        return True
+    import time
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        if not any(_user32.GetAsyncKeyState(vk) & 0x8000 for vk in _MOD_VKS):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def press_combo(parsed: dict) -> bool:
+    """parsed = {'mods': set(vk), 'key': vk}. Pulsa la combinacion. Devuelve
+    False si no se pudo (los modificadores del disparador seguian pulsados: se
+    aborta en vez de inyectar un combo corrupto)."""
     if not WIN or not parsed:
-        return
+        return False
+    if not wait_modifiers_released():   # aun con Ctrl/Alt del atajo: no inyectar
+        logger.warning("press_combo abortado: modificadores del atajo aun pulsados.")
+        return False
     mods = list(parsed.get("mods", []))
     key = parsed.get("key")
     for vk in mods:
@@ -178,6 +207,7 @@ def press_combo(parsed: dict) -> None:
         _user32.keybd_event(key, 0, KEYEVENTF_KEYUP, 0)
     for vk in reversed(mods):
         _user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+    return True
 
 
 class _KEYBDINPUT(ctypes.Structure if WIN else object):
@@ -202,14 +232,27 @@ if WIN:
         pass
 
 
-def type_text(text: str) -> None:
-    """Escribe texto unicode donde este el foco (SendInput KEYEVENTF_UNICODE)."""
+def type_text(text: str) -> int:
+    """Escribe texto unicode donde este el foco (SendInput KEYEVENTF_UNICODE).
+
+    Devuelve cuantas unidades UTF-16 se INYECTARON de verdad (0 si SendInput
+    fue bloqueado, p.ej. la ventana activa corre como administrador). Antes se
+    daba por hecho el exito y el registro decia 'Escrito N caracteres' aunque
+    no se hubiera escrito nada.
+    """
     if not WIN or not text:
-        return
+        return 0
+    if not wait_modifiers_released():
+        # con Ctrl/Alt del atajo aun pulsados, el texto llegaria como atajos:
+        # mejor no escribir nada y reportarlo honestamente
+        logger.warning("type_text abortado: modificadores del atajo aun pulsados.")
+        return 0
     INPUT_KEYBOARD = 1
+    # utf-16-le: los caracteres fuera del BMP (emoji) viajan como par sustituto
+    raw = text.encode("utf-16-le")
+    codes = [int.from_bytes(raw[i:i + 2], "little") for i in range(0, len(raw), 2)]
     inputs = []
-    for ch in text:
-        code = ord(ch)
+    for code in codes:
         for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
             inp = _INPUT()
             inp.type = INPUT_KEYBOARD
@@ -217,7 +260,10 @@ def type_text(text: str) -> None:
             inputs.append(inp)
     n = len(inputs)
     arr = (_INPUT * n)(*inputs)
-    _user32.SendInput(n, arr, ctypes.sizeof(_INPUT))
+    sent = int(_user32.SendInput(n, arr, ctypes.sizeof(_INPUT)))
+    if sent < n:
+        logger.warning("SendInput inyecto %d/%d eventos (¿ventana elevada?)", sent, n)
+    return sent // 2
 
 
 def key_down(vk: int) -> bool:

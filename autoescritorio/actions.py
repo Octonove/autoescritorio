@@ -28,9 +28,46 @@ def _is_url(s: str) -> bool:
     return s.lower().startswith(("http://", "https://"))
 
 
+def _base_context(params: dict) -> dict:
+    """Marcadores dinamicos disponibles SIEMPRE en cualquier accion:
+    {date} fecha de hoy (DD/MM/AAAA), {time} hora (HH:MM), {datetime} ambas,
+    {clipboard} el texto del portapapeles. Hacen utiles plantillas como
+    'insertar la fecha' o 'guardar lo copiado'."""
+    now = datetime.now()
+    base = {
+        "date": now.strftime("%d/%m/%Y"),
+        "time": now.strftime("%H:%M"),
+        "datetime": now.strftime("%d/%m/%Y %H:%M"),
+    }
+    # el portapapeles solo se lee si alguna plantilla lo pide (abrirlo tiene coste)
+    if any("{clipboard}" in str(v) for v in (params or {}).values()):
+        base["clipboard"] = winutil.get_clipboard_text()
+    return base
+
+
+def _safe_for_path(value: str) -> str:
+    r"""Version de un valor apta para nombres de archivo/carpeta: sustituye los
+    caracteres que en Windows son estructurales (\ / : * ? " < > |) o saltos de
+    linea por un guion. Asi {date} (DD/MM/AAAA) o {time} (HH:MM) usados en una
+    RUTA no crean subcarpetas ni flujos NTFS ocultos."""
+    out = value
+    for ch in '\\/:*?"<>|\r\n\t':
+        out = out.replace(ch, "-")
+    return out
+
+
 def execute(action_type: str, params: dict, context: dict | None = None, *, notify=None) -> str:
     """Ejecuta la accion y devuelve un texto descriptivo para el registro."""
-    p = rules.substitute(params or {}, context or {})
+    ctx_full = {**_base_context(params), **(context or {})}   # el evento pisa a los base
+    p = rules.substitute(params or {}, ctx_full)
+    context = ctx_full
+    # Los campos de tipo carpeta/archivo se sustituyen con marcadores SANEADOS:
+    # {date}/{time} llevan '/' y ':' que romperian la ruta (subcarpetas o ADS).
+    ruta_ctx = {k: (_safe_for_path(v) if isinstance(v, str) else v)
+                for k, v in ctx_full.items()}
+    for k, _lbl, kind, _def in rules.ACTIONS.get(action_type, {}).get("fields", []):
+        if kind in ("folder", "file") and isinstance((params or {}).get(k), str):
+            p[k] = rules.substitute({k: params[k]}, ruta_ctx)[k]
 
     if action_type == "open":
         dest = str(p.get("destino", "")).strip()
@@ -86,14 +123,22 @@ def execute(action_type: str, params: dict, context: dict | None = None, *, noti
 
     if action_type == "type_text":
         txt = str(p.get("texto", ""))
-        winutil.type_text(txt)
+        unidades = len(txt.encode("utf-16-le")) // 2
+        escritas = winutil.type_text(txt)
+        if txt and escritas <= 0:
+            raise ActionError("No se pudo escribir el texto (¿la ventana activa "
+                              "se ejecuta como administrador?).")
+        if escritas < unidades:
+            return f"Escrito parcialmente ({escritas}/{unidades} caracteres)"
         return f"Escrito ({len(txt)} caracteres)"
 
     if action_type == "keys":
         parsed = rules.parse_combo(str(p.get("combo", "")))
         if not parsed:
             raise ActionError("Combinacion de teclas invalida.")
-        winutil.press_combo(parsed)
+        if not winutil.press_combo(parsed):
+            raise ActionError("No se pudo enviar la combinacion (¿seguias pulsando "
+                              "el atajo? sueltalo antes).")
         return f"Teclas: {p.get('combo')}"
 
     if action_type in ("move_files", "copy_files"):
