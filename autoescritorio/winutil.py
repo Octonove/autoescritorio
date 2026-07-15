@@ -5,6 +5,7 @@ teclas/texto."""
 from __future__ import annotations
 
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,17 @@ def _declare_prototypes() -> None:
     _user32.SendInput.restype = w.UINT
     # dwExtraInfo es ULONG_PTR (8 bytes en x64) -> c_void_p, no un puntero a c_ulong
     _user32.keybd_event.argtypes = [w.BYTE, w.BYTE, w.DWORD, c.c_void_p]
+    # atajos globales (RegisterHotKey) + bucle de mensajes
+    _user32.RegisterHotKey.argtypes = [w.HWND, c.c_int, w.UINT, w.UINT]
+    _user32.RegisterHotKey.restype = w.BOOL
+    _user32.UnregisterHotKey.argtypes = [w.HWND, c.c_int]
+    _user32.GetMessageW.argtypes = [c.c_void_p, w.HWND, w.UINT, w.UINT]
+    _user32.GetMessageW.restype = c.c_int
+    _user32.PeekMessageW.argtypes = [c.c_void_p, w.HWND, w.UINT, w.UINT, w.UINT]
+    _user32.PeekMessageW.restype = w.BOOL
+    _user32.PostThreadMessageW.argtypes = [w.DWORD, w.UINT, c.c_void_p, c.c_void_p]
+    _user32.PostThreadMessageW.restype = w.BOOL
+    _kernel32.GetCurrentThreadId.restype = w.DWORD
 
 
 if WIN:
@@ -168,6 +180,21 @@ KEYEVENTF_UNICODE = 0x0004
 _MOD_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)
 
 
+def wait_keys_up(vks, timeout: float = 1.5) -> bool:
+    """Espera a que un conjunto concreto de teclas (p. ej. TODO el combo del
+    atajo, incluida la letra) esten fisicamente soltadas. Evita que la tecla del
+    atajo se auto-repita mientras se escribe el texto ('Texto' -> 'Texto aaaa')."""
+    if not WIN:
+        return True
+    import time
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        if not any(_user32.GetAsyncKeyState(vk) & 0x8000 for vk in vks):
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def wait_modifiers_released(timeout: float = 1.5) -> bool:
     """Espera a que Ctrl/Alt/Shift/Win esten FISICAMENTE soltados. Devuelve True
     si se soltaron, False si al vencer el plazo seguian pulsados.
@@ -280,3 +307,124 @@ def key_down(vk: int) -> bool:
     if not WIN:
         return False
     return bool(_user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+# --- atajos globales por eventos (RegisterHotKey) ---------------------------
+# Sustituye al polling de GetAsyncKeyState (que perdia pulsaciones): esto NO
+# pierde ninguna y ademas Windows CONSUME el combo, de modo que la tecla del
+# atajo no se cuela ni se auto-repite en la aplicacion destino.
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
+WM_HOTKEY = 0x0312
+_WM_APP_RELOAD = 0x8001   # WM_APP+1: re-registrar
+_WM_APP_QUIT = 0x8002     # WM_APP+2: salir del bucle
+_VK_TO_MOD = {0x10: MOD_SHIFT, 0x11: MOD_CONTROL, 0x12: MOD_ALT, 0x5B: MOD_WIN}
+
+
+class HotkeyListener:
+    """Escucha atajos globales via RegisterHotKey en su propio hilo con bucle de
+    mensajes. `on_hotkey(id)` se llama al pulsar; `on_failed([ids])` con los que
+    no se pudieron registrar (otro programa ya los usa)."""
+
+    def __init__(self, on_hotkey, on_failed=None):
+        self.on_hotkey = on_hotkey
+        self.on_failed = on_failed or (lambda _ids: None)
+        self._specs: list[tuple[int, set, int]] = []   # (id, mods_vk, key_vk)
+        self._registered: list[int] = []
+        self._tid = 0
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._lock = threading.Lock()
+
+    def set_hotkeys(self, specs) -> None:
+        """specs = [(id:int, mods:set(vk), key:vk)]. (Re)registra en caliente. Si
+        el bucle aun no arranco, solo se almacenan (el _apply inicial los usa)."""
+        with self._lock:
+            self._specs = list(specs)
+        if self._tid:
+            # reintenta: justo tras crear el hilo la cola podria no existir aun
+            for _ in range(50):
+                if _user32.PostThreadMessageW(self._tid, _WM_APP_RELOAD, None, None):
+                    return
+                import time
+                time.sleep(0.01)
+
+    def start(self) -> None:
+        if not WIN or self._thread:
+            return
+        self._ready.clear()          # reinicio limpio (stop -> start)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=2)
+
+    def stop(self) -> None:
+        if self._tid:
+            for _ in range(50):
+                if _user32.PostThreadMessageW(self._tid, _WM_APP_QUIT, None, None):
+                    break
+                import time
+                time.sleep(0.01)
+        if self._thread:
+            self._thread.join(timeout=3)
+        self._thread = None
+        self._tid = 0
+
+    # ---- interno (hilo del bucle de mensajes) ----
+    def _apply(self) -> None:
+        for hid in self._registered:
+            try:
+                _user32.UnregisterHotKey(None, hid)
+            except Exception:  # noqa: BLE001
+                pass
+        self._registered = []
+        with self._lock:
+            specs = list(self._specs)
+        fallidos = []
+        for hid, mods, vk in specs:
+            flags = MOD_NOREPEAT
+            for m in mods:
+                flags |= _VK_TO_MOD.get(m, 0)
+            try:
+                ok = _user32.RegisterHotKey(None, hid, flags, vk)
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                self._registered.append(hid)
+            else:
+                fallidos.append(hid)
+        try:
+            self.on_failed(fallidos)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run(self) -> None:
+        import ctypes
+        msg = wintypes.MSG()
+        # PeekMessage FUERZA la creacion de la cola de mensajes de este hilo
+        # ANTES de anunciar que esta listo: sin esto, un PostThreadMessage
+        # temprano (recarga en el arranque) fallaba con ERROR_INVALID_THREAD_ID
+        # y los atajos no se registraban en silencio.
+        _user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+        self._tid = _kernel32.GetCurrentThreadId()
+        self._apply()
+        self._ready.set()
+        try:
+            while True:
+                r = _user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if r in (0, -1):
+                    break
+                if msg.message == WM_HOTKEY:
+                    try:
+                        self.on_hotkey(int(msg.wParam))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("on_hotkey fallo: %s", exc)
+                elif msg.message == _WM_APP_RELOAD:
+                    self._apply()
+                elif msg.message == _WM_APP_QUIT:
+                    break
+        finally:
+            for hid in self._registered:
+                try:
+                    _user32.UnregisterHotKey(None, hid)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._registered = []

@@ -29,6 +29,15 @@ class Engine:
         self._thread: threading.Thread | None = None
         self._state: dict = {}
         self._last_fire: dict = {}
+        # atajos por EVENTOS (RegisterHotKey): no pierde pulsaciones y consume el
+        # combo (la tecla no se auto-repite en el destino). Sustituye al polling.
+        self._hotkeys = winutil.HotkeyListener(self._on_hotkey, self._on_hotkey_failed)
+        # id de hotkey -> (id de regla, teclas del combo). Un solo dict que se
+        # reasigna de forma ATOMICA (el hilo del listener lo lee sin lock).
+        self._hk: dict[int, tuple[str, set]] = {}
+        # serializa la EJECUCION de acciones: dos atajos pulsados a la vez no
+        # deben inyectar texto simultaneamente (saldria entremezclado).
+        self._action_lock = threading.Lock()
 
     @property
     def running(self) -> bool:
@@ -40,6 +49,8 @@ class Engine:
         self._stop.clear()
         self._state.clear()
         self._last_fire.clear()
+        self._sync_hotkeys()      # fija los specs ANTES de arrancar el bucle...
+        self._hotkeys.start()     # ...para que el registro inicial cree la cola
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         self._log("Motor en marcha.")
@@ -49,6 +60,7 @@ class Engine:
         if self._thread:
             self._thread.join(timeout=2)
         self._thread = None
+        self._hotkeys.stop()
         self._log("Motor detenido.")
 
     def reload(self) -> None:
@@ -60,6 +72,66 @@ class Engine:
             for k in list(self._state):
                 if k not in ids:
                     del self._state[k]
+        except Exception:  # noqa: BLE001
+            pass
+        if self.running:
+            self._sync_hotkeys()
+
+    # ------------------------------------------------------------- atajos
+    def _sync_hotkeys(self) -> None:
+        """(Re)registra los atajos de las reglas activas via RegisterHotKey."""
+        specs, hk, hid = [], {}, 1
+        for r in self._enabled_rules():
+            if r.trigger_type != "hotkey":
+                continue
+            parsed = rules.parse_combo(str((r.trigger_params or {}).get("combo", "")))
+            # se EXIGE al menos un modificador: registrar una tecla suelta
+            # (p. ej. 'A') la secuestraria en TODO el sistema.
+            if not parsed or not parsed.get("key") or not parsed.get("mods"):
+                continue
+            specs.append((hid, parsed["mods"], parsed["key"]))
+            hk[hid] = (r.id, set(parsed["mods"]) | {parsed["key"]})
+            hid += 1
+        self._hk = hk                     # reasignacion atomica
+        self._hotkeys.set_hotkeys(specs)
+
+    def _enabled_rules(self) -> list:
+        try:
+            return [r for r in self.get_rules() if r.enabled]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _on_hotkey(self, hotkey_id: int) -> None:
+        """WM_HOTKEY: dispara la regla en un hilo aparte (una accion lenta -p.ej.
+        esperar a soltar teclas- no debe bloquear el bucle de mensajes)."""
+        entry = self._hk.get(hotkey_id)   # lectura atomica del dict actual
+        if not entry:
+            return
+        rid, combo = entry
+        rule = next((r for r in self._enabled_rules() if r.id == rid), None)
+        if rule is None:
+            return
+
+        def _run():
+            # espera a soltar TODO el combo (incl. la letra) antes de actuar: si
+            # no, la tecla del atajo se auto-repetiria en el texto inyectado.
+            if combo:
+                winutil.wait_keys_up(combo)
+            # per_event: los atajos son acciones DELIBERADAS del usuario; cada
+            # pulsacion debe disparar (sin el cooldown de los disparos de estado).
+            self._fire(rule, {}, per_event=True)
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_hotkey_failed(self, fallidos: list) -> None:
+        hk = self._hk
+        try:
+            reglas = {r.id: r for r in self.get_rules()}
+            for h in fallidos:
+                entry = hk.get(h)
+                r = reglas.get(entry[0]) if entry else None
+                if r:
+                    self._log(f"⚠ El atajo de «{r.name}» ya lo usa otro programa; "
+                              "elige otra combinacion.")
         except Exception:  # noqa: BLE001
             pass
 
@@ -86,7 +158,14 @@ class Engine:
             self._stop.wait(TICK)
 
     def _snapshots(self, heavy: bool) -> dict:
-        s = {"now": time.time(), "clip": winutil.get_clipboard_text()}
+        s = {"now": time.time()}
+        # el portapapeles solo se lee si hay una regla que lo vigila: abrirlo en
+        # cada tick era innecesario y podia bloquear el motor (otras apps lo
+        # bloquean con frecuencia), retrasando el resto de disparadores.
+        if any(r.trigger_type == "clipboard_text" for r in self._enabled_rules()):
+            s["clip"] = winutil.get_clipboard_text()
+        else:
+            s["clip"] = ""
         if heavy:
             s["procs"] = winutil.list_processes()
             s["titles"] = winutil.list_window_titles()
@@ -134,17 +213,7 @@ class Engine:
             return
 
         if t == "hotkey":
-            parsed = rules.parse_combo(str(tp.get("combo", "")))
-            if not parsed:
-                return
-            down = winutil.key_down(parsed["key"]) and all(
-                winutil.key_down(m) for m in parsed["mods"])
-            prev = st.get("down", False)
-            st["down"] = down
-            st["_init"] = True
-            if down and not prev:
-                self._fire(rule, {})
-            return
+            return   # los atajos van por eventos (RegisterHotKey), no por polling
 
         if t == "clipboard_text":
             cur = snap.get("clip", "")
@@ -259,11 +328,13 @@ class Engine:
         if not per_event and now - self._last_fire.get(rule.id, 0) < COOLDOWN:
             return
         self._last_fire[rule.id] = now
-        try:
-            res = actions.execute(rule.action_type, rule.action_params, context, notify=self.notify)
-            self._log(f"✓ «{rule.name}» → {res}")
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"✗ «{rule.name}» fallo: {exc}")
+        with self._action_lock:   # una accion cada vez (no solapar inyecciones)
+            try:
+                res = actions.execute(rule.action_type, rule.action_params, context,
+                                      notify=self.notify)
+                self._log(f"✓ «{rule.name}» → {res}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"✗ «{rule.name}» fallo: {exc}")
 
 
 def _norm_hhmm(s: str) -> str:

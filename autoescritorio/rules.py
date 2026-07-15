@@ -102,8 +102,13 @@ class Rule:
                 return "El intervalo debe ser un numero."
         if self.trigger_type == "daily" and not _valid_hhmm(tp.get("hora", "")):
             return "La hora debe tener formato HH:MM (00:00 a 23:59)."
-        if self.trigger_type in ("hotkey",) and not parse_combo(tp.get("combo", "")):
-            return "La combinacion de teclas no es valida."
+        if self.trigger_type == "hotkey":
+            pc = parse_combo(tp.get("combo", ""))
+            if not pc:
+                return "La combinacion de teclas no es valida."
+            if not pc.get("mods"):
+                return ("El atajo necesita al menos Ctrl, Alt, Shift o Win "
+                        "(una tecla sola bloquearia esa tecla en todo Windows).")
         if self.trigger_type == "file_new" and not str(tp.get("carpeta", "")).strip():
             return "Indica la carpeta a vigilar."
         if self.action_type == "open" and not str(ap.get("destino", "")).strip():
