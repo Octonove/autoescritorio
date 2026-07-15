@@ -217,10 +217,20 @@ class _KEYBDINPUT(ctypes.Structure if WIN else object):
                     ("dwExtraInfo", ctypes.c_void_p)]   # ULONG_PTR
 
 
+class _MOUSEINPUT(ctypes.Structure if WIN else object):
+    # No se usa para nada, pero es el miembro MAS GRANDE de la union INPUT: sin
+    # el, sizeof(INPUT) sale 32 en x64 en vez de 40, SendInput rechaza el cbSize
+    # y devuelve 0 -> el texto NUNCA se escribia (fallo silencioso historico).
+    if WIN:
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_void_p)]
+
+
 if WIN:
     class _INPUT(ctypes.Structure):
         class _U(ctypes.Union):
-            _fields_ = [("ki", _KEYBDINPUT)]
+            _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
         _anonymous_ = ("u",)
         _fields_ = [("type", wintypes.DWORD), ("u", _U)]
 

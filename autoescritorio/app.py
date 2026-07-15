@@ -83,13 +83,17 @@ class App(tk.Tk):
                               selectforeground=theme.WHITE)
         self.lst.pack(fill="both", expand=True)
         self.lst.bind("<Double-Button-1>", lambda e: self._edit_rule())
-        rb = ttk.Frame(left); rb.pack(fill="x", pady=(6, 0))
-        ttk.Button(rb, text="+ Nueva", command=self._new_rule).pack(side="left")
-        ttk.Button(rb, text="Ejemplos", command=self._examples_dialog).pack(side="left", padx=4)
-        ttk.Button(rb, text="Editar", command=self._edit_rule).pack(side="left")
-        ttk.Button(rb, text="Activar/Pausar", command=self._toggle_rule).pack(side="left", padx=4)
-        ttk.Button(rb, text="Probar", command=self._test_rule).pack(side="left")
-        ttk.Button(rb, text="Eliminar", command=self._delete_rule).pack(side="right")
+        # Dos filas repartidas por igual: con 6 acciones en una sola fila el
+        # boton 'Eliminar' quedaba fuera de la ventana cuando la columna no era
+        # ancha (no se podian borrar reglas).
+        rb1 = ttk.Frame(left); rb1.pack(fill="x", pady=(6, 0))
+        for txt, cmd in (("+ Nueva", self._new_rule), ("Ejemplos", self._examples_dialog),
+                         ("Editar", self._edit_rule)):
+            ttk.Button(rb1, text=txt, command=cmd).pack(side="left", expand=True, fill="x", padx=2)
+        rb2 = ttk.Frame(left); rb2.pack(fill="x", pady=(4, 0))
+        for txt, cmd in (("Activar/Pausar", self._toggle_rule), ("Probar", self._test_rule),
+                         ("Eliminar", self._delete_rule)):
+            ttk.Button(rb2, text=txt, command=cmd).pack(side="left", expand=True, fill="x", padx=2)
 
         # registro de actividad
         right = ttk.LabelFrame(body, text="Actividad", padding=8)
