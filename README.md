@@ -1,48 +1,53 @@
 # AutoEscritorio
 
-Automatización de escritorio para **Windows** (estilo Power Automate, pero simple y **100% local**): reglas *disparador → acción* que vigilan tu PC y actúan por ti.
+[![license](https://img.shields.io/github/license/Octonove/autoescritorio)](LICENSE)
+[![release](https://img.shields.io/github/v/release/Octonove/autoescritorio)](https://github.com/Octonove/autoescritorio/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-1E3A5F)](https://github.com/Octonove/autoescritorio/releases/latest)
 
-## ⬇️ Descargar (Windows 10/11)
+Trigger→action automation for Windows: watch folders, hotkeys, USB, clipboard — simple and local.
 
-### ➡️ [**Descargar AutoEscritorio (instalador .exe)**](https://github.com/Octonove/autoescritorio/releases/latest/download/AutoEscritorio-Setup.exe)
+**Free · Open source (MIT) · 100% local — nothing ever leaves your PC · No accounts, no limits, no watermarks**
 
-Descarga **directa** del instalador, sin registro. También puedes ver la [última versión y notas](https://github.com/Octonove/autoescritorio/releases/latest).
+<img src="docs/screenshot.png" width="720" alt="AutoEscritorio screenshot">
 
-> Si Windows muestra *"Windows protegió tu PC"* (es normal en programas nuevos sin firma): pulsa **Más información → Ejecutar de todas formas**. Se instala sin permisos de administrador.
+> 🇪🇸 ¿Prefieres leerlo en español? → **[README en español](README.es.md)**
 
----
+## Features
 
-## Funciones
+- Rules engine: **when X happens, do Y** — no flowcharts, no cloud
+- Triggers: file/folder changes, global hotkeys, USB devices, clipboard
+- Actions: move/rename files, run programs, notifications and more
+- Lives in the tray, works while you sleep, 100% on your PC
 
-**Disparadores**: cada X tiempo · a una hora diaria · atajo de teclado global · archivo nuevo en una carpeta (espera a que termine de copiarse) · se abre/cierra un programa · aparece una ventana · se conecta un USB · copias texto al portapapeles.
+## Download (Windows 10/11)
 
-**Acciones**: abrir programa/archivo/URL · ejecutar comando (sin shell: los datos del disparador nunca pueden inyectar) · notificación · escribir texto · pulsar teclas · mover/copiar archivos (sin sobrescribir) · reproducir sonido · anotar en un log.
+### ➡️ [**Download AutoEscritorio (installer .exe)**](https://github.com/Octonove/autoescritorio/releases/latest/download/AutoEscritorio-Setup.exe)
 
-**Marcadores dinámicos** (en textos de «escribir texto», «anotar en log», etc.): `{date}` fecha de hoy · `{time}` hora · `{datetime}` ambas · `{clipboard}` lo que tengas copiado · y los del disparador (`{drive}`, `{file}`, `{window}`, `{text}`).
+Direct download, no sign-up. If Windows shows *"Windows protected your PC"* (normal for new unsigned apps): click **More info → Run anyway**. Installs without administrator rights.
 
-- **Ejemplos listos para usar**: botón «Ejemplos» con plantillas útiles (insertar la fecha, tu firma de correo, ordenar los PDF de Descargas, copia de seguridad al conectar un USB, pausa activa cada hora…) que añades con un clic.
-- **Reglas en lenguaje natural** (opcional, [Ollama](https://ollama.com)): «cuando conecte un USB, abre la calculadora» → regla lista.
-- Motor por transiciones con línea base (no dispara con lo ya existente), cooldown anti-ráfagas y registro de actividad.
+> ⭐ **If AutoEscritorio is useful to you, a star on GitHub is the best way to support it — it costs nothing and helps a lot.**
 
-## Stack
+## More free local-first tools
 
-Python 3 + Tkinter (ttk) · ctypes/Win32 (hotkeys, procesos, portapapeles, SendInput) · Ollama opcional.
+Every tool in this family follows the same rules: free, open source, and nothing leaves your PC.
 
-Depende del paquete compartido de la suite [`octonove-core`](https://github.com/Octonove/octonove-core) (tema, capa Ollama, config): debe estar en el `sys.path` del entorno (vía `.pth` o copia junto al proyecto).
+| Tool | What it does |
+|---|---|
+| [CapturaPro](https://github.com/Octonove/capturapro) | Screenshots, GIFs and screen recordings for Windows — annotated, watermark-free, 100% local. |
+| [TranscriptorIA](https://github.com/Octonove/transcriptor-ia) | Audio & video to text and .srt subtitles with local Whisper AI — free, private, unlimited. |
+| [PDFLocal](https://github.com/Octonove/pdflocal) | The full PDF toolbox for Windows: merge, split, compress, sign, OCR and chat with your documents — no uploads. |
+| [CajaPDF](https://github.com/Octonove/cajapdf) | The tiny PDF utility: merge, split and compress — free, offline, no accounts. |
+| [CapturaStudio](https://github.com/Octonove/capturastudio) | An OBS-style recording & streaming studio with local AI superpowers — record, stream, auto-edit. |
+| [GuiaClick](https://github.com/Octonove/guiaclick) | Record your clicks, get a step-by-step guide — annotated screenshots, blur, PDF/HTML export. Like Scribe, but local. |
+| [ActaLocal](https://github.com/Octonove/actalocal) | Meetings → minutes: local Whisper transcription plus AI summary, decisions and action items. |
+| [BalanceLocal](https://github.com/Octonove/balancelocal) | Your work Wrapped: where your time actually goes, as shareable cards, a PDF report and a mini-video. |
+| [CajaNegra](https://github.com/Octonove/cajanegra) | A dashcam for your PC: the last minutes of your screen, one hotkey away from a perfect incident report. |
+| [FichajeLocal](https://github.com/Octonove/fichajelocal) | A local time-clock kiosk for small business: PIN check-in, tamper-evident records, accountant-ready reports. |
+| [ITVLocal](https://github.com/Octonove/itvlocal) | An MOT-style inspection for your PC: 1–3 minutes, a 0–10 score and a PDF certificate. Inspects, never modifies. |
+| [SonarArchivo](https://github.com/Octonove/sonararchivo) | Find files by what's INSIDE them: local full-text search over your messy folders and old drives. |
 
-## Compilar
+Also: **[CRBRO](https://github.com/Octonove/crbro-memory)** — persistent neural memory for AI agents (MCP server).
 
-```powershell
-.\build\build.ps1              # ejecutable (PyInstaller onedir)
-.\build\build-installer.ps1    # instalador (Inno Setup)
-```
+## License
 
-## Tests
-
-```powershell
-python -m pytest tests/ -q
-```
-
-## Licencia
-
-[MIT](LICENSE) — © 2026 Octonove.
+[MIT](LICENSE) — see also [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) where present.
