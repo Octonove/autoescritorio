@@ -2,6 +2,11 @@
 
 Automatización de escritorio para **Windows** (estilo Power Automate, pero simple y **100% local**): reglas *disparador → acción* que vigilan tu PC y actúan por ti.
 
+<!-- invokard-coffee -->
+**&#9749; Si esto te ahorra tiempo, inv&iacute;tame a un caf&eacute;.** [![Inv&iacute;tame a un caf&eacute; con PayPal](https://img.shields.io/badge/PayPal-Inv%C3%ADtame%20a%20un%20caf%C3%A9-00457C?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?business=stradoxx%40gmail.com&no_recurring=0&currency_code=EUR&item_name=Support%20autoescritorio)
+
+**USDC** &middot; Solana `5n6Gfosk7SdwbvdtE9xiLWpcGPBBBGDZYRfAkWyCk86g` &middot; Ethereum (ERC-20) `0xe176866f9d7fdb498e0d4a983d3e34d84dcd6bfc`
+
 ## ⬇️ Descargar (Windows 10/11)
 
 ### ➡️ [**Descargar AutoEscritorio (instalador .exe)**](https://github.com/Octonove/autoescritorio/releases/latest/download/AutoEscritorio-Setup.exe)
